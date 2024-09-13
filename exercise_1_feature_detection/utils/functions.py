@@ -39,39 +39,47 @@ def compute_harris_response(I: np.array, k: float = 0.06) -> Tuple[np.array]:
     return R, A, B, C, Idx, Idy
 
 
+import numpy as np
+from typing import Tuple
+
 def detect_corners(R: np.array, threshold: float = 0.1) -> Tuple[np.array, np.array]:
     """Computes key-points from a Harris response image.
 
-    Key points are all points where the harris response is significant and greater than its neighbors.
+    Key points are all points where the Harris response is significant and greater than its neighbors.
 
     Args:
-        R: A float image with the harris response
+        R: A float image with the Harris response
         threshold: A float determining which Harris response values are significant.
 
     Returns:
         A tuple of two 1D integer arrays containing the x and y coordinates of key-points in the image.
     """
-    # Step 1 (recommended): Pad the response image to facilitate vectorization
-    padded_R = np.pad(R, pad_width=1, mode='constant', constant_values=0)
+    # Step 1: Pad the response image to facilitate vectorization
+    padded_R = np.pad(R, pad_width=1, mode='constant', constant_values=-np.inf)
 
-    # Step 2 (recommended): Create one image for every offset in the 3x3 neighborhood
-    neighbors = [
-        padded_R[:-2, :-2], padded_R[:-2, -1], padded_R[:-2, 1:-1],
-        padded_R[-1, :-2], padded_R[-1, -1], padded_R[-1, 1:-1],
-        padded_R[1:-1, :-2], padded_R[1:-1, -1], padded_R[1:-1, 1:-1]
+    # Step 2: Create one image for every offset in the 3x3 neighborhood
+    offsets = [
+        padded_R[0:-2, 0:-2],  # top-left
+        padded_R[0:-2, 1:-1],  # top-center
+        padded_R[0:-2, 2:],    # top-right
+        padded_R[1:-1, 0:-2],  # middle-left
+        padded_R[1:-1, 2:],    # middle-right
+        padded_R[2:, 0:-2],    # bottom-left
+        padded_R[2:, 1:-1],    # bottom-center
+        padded_R[2:, 2:]       # bottom-right
     ]
 
-    # Step 3 (recommended): Compute the greatest neighbor of every pixel
-    max_neighbor = np.maximum.reduce(neighbors)
+    # Step 3: Compute the greatest neighbor of every pixel
+    max_neighbors = np.maximum.reduce(offsets)
 
-    # Step 4 (recommended): Compute a boolean image with only all key-points set to True
-    is_corner= (R > threshold) & (R > max_neighbor[1:-1, 1:-1])
+    # Step 4: Compute a boolean image with only key-points set to True
+    key_points_mask = (R > threshold) & (R > max_neighbors)
 
-    # Step 5 (recommended): Use np.nonzero to compute the locations of the key-points from the boolean image
+    # Step 5: Use np.nonzero to compute the locations of the key-points from the boolean image
+    keypoint_y, keypoint_x = np.nonzero(key_points_mask)
 
-    y_coords, x_coords = np.nonzero(is_corner)
+    return keypoint_x, keypoint_y
 
-    return x_coords, y_coords
 
 
 import numpy as np
