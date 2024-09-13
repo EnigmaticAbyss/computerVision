@@ -17,19 +17,26 @@ def compute_harris_response(I: np.array, k: float = 0.06) -> Tuple[np.array]:
     assert I.dtype == np.float32
 
     # Step 1: Compute Idx and Idy with cv2.Sobel
-
+    Idx = cv2.Sobel(I, cv2.CV_32F, 1, 0, ksize=3)
+    Idy = cv2.Sobel(I, cv2.CV_32F, 0, 1, ksize=3)
 
     # Step 2: Ixx Iyy Ixy from Idx and Idy
-
+    A = Idx * Idx  # Ixx
+    B = Idx * Idy  # Ixy
+    C = Idy * Idy  # Iyy
 
     # Step 3: compute A, B, C from Ixx, Iyy, Ixy with cv2.GaussianBlur
     # Use sdev = 1 and kernelSize = (3, 3) in cv2.GaussianBlur
-
+    A = cv2.GaussianBlur(A, (3, 3), sigmaX=1)
+    B = cv2.GaussianBlur(B, (3, 3), sigmaX=1)
+    C = cv2.GaussianBlur(C, (3, 3), sigmaX=1)
 
     # Step 4: Compute the harris response with the determinant and the trace of T
+    detM = (A * C) - (B * B)
+    traceM = A + C
+    R = detM - k * (traceM ** 2)
 
-
-    raise NotImplementedError
+    return R, A, B, C, Idx, Idy
 
 
 def detect_corners(R: np.array, threshold: float = 0.1) -> Tuple[np.array, np.array]:
@@ -45,22 +52,29 @@ def detect_corners(R: np.array, threshold: float = 0.1) -> Tuple[np.array, np.ar
         A tuple of two 1D integer arrays containing the x and y coordinates of key-points in the image.
     """
     # Step 1 (recommended): Pad the response image to facilitate vectorization
-
+    padded_R = np.pad(R, pad_width=1, mode='constant', constant_values=0)
 
     # Step 2 (recommended): Create one image for every offset in the 3x3 neighborhood
-
+    neighbors = [
+        padded_R[:-2, :-2], padded_R[:-2, -1], padded_R[:-2, 1:-1],
+        padded_R[-1, :-2], padded_R[-1, -1], padded_R[-1, 1:-1],
+        padded_R[1:-1, :-2], padded_R[1:-1, -1], padded_R[1:-1, 1:-1]
+    ]
 
     # Step 3 (recommended): Compute the greatest neighbor of every pixel
-
+    max_neighbor = np.maximum.reduce(neighbors)
 
     # Step 4 (recommended): Compute a boolean image with only all key-points set to True
-
+    is_corner= (R > threshold) & (R > max_neighbor[1:-1, 1:-1])
 
     # Step 5 (recommended): Use np.nonzero to compute the locations of the key-points from the boolean image
 
+    y_coords, x_coords = np.nonzero(is_corner)
 
-    raise NotImplementedError
+    return x_coords, y_coords
 
+
+import numpy as np
 
 def detect_edges(R: np.array, edge_threshold: float = -0.01) -> np.array:
     """Computes a boolean image where edge pixels are set to True.
@@ -74,19 +88,27 @@ def detect_edges(R: np.array, edge_threshold: float = -0.01) -> np.array:
     Returns:
         A boolean image with edge pixels set to True.
     """
-    # Step 1 (recommended): Pad the response image to facilitate vectorization
+    # Step 1: Pad the response image to facilitate vectorization
+    padded_R = np.pad(R, pad_width=1, mode='constant', constant_values=np.inf)
 
+    # Step 2: Calculate significant response pixels
+    significant = R < edge_threshold
 
-    # Step 2 (recommended): Calculate significant response pixels
+    # Step 3: Create two images with the smaller x-axis and y-axis neighbors respectively
+    # Get the left and right neighbors for the x-axis check
+    left_neighbor = padded_R[1:-1, :-2]
+    right_neighbor = padded_R[1:-1, 2:]
 
+    # Get the top and bottom neighbors for the y-axis check
+    top_neighbor = padded_R[:-2, 1:-1]
+    bottom_neighbor = padded_R[2:, 1:-1]
 
-    # Step 3 (recommended): Create two images with the smaller x-axis and y-axis neighbors respectively
+    # Step 4: Calculate pixels that are lower than either their x-axis or y-axis neighbors
+    x_axis_minimal = (R < left_neighbor) & (R < right_neighbor)
+    y_axis_minimal = (R < top_neighbor) & (R < bottom_neighbor)
 
+    # Step 5: Calculate valid edge pixels by combining significant and axis_minimal pixels
+    edge_pixels = significant & (x_axis_minimal | y_axis_minimal)
 
-    # Step 4 (recommended): Calculate pixels that are lower than either their x-axis or y-axis neighbors
+    return edge_pixels
 
-
-    # Step 5 (recommended): Calculate valid edge pixels by combining significant and axis_minimal pixels
-
-
-    raise NotImplementedError
