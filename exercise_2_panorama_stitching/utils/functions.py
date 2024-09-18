@@ -4,7 +4,11 @@ from typing import Tuple, Dict, List
 import numpy as np
 import scipy.spatial as spatial
 from itertools import product
+from scipy.linalg import svd
 import os
+import random
+from scipy.spatial.distance import cdist
+
 
 # These are type hints, they mostly make the code readable and testable
 t_points = np.array
@@ -72,14 +76,30 @@ def extract_features(img: t_img, num_features: int = 500) -> Tuple[t_points, t_d
         A tuple containing a numpy array of [N x 2] and numpy array of [N x 32]
     """
     #TODO : Hint - you will need cv2.ORB_create
-    raise NotImplementedError
+      # Step 1: Initialize the ORB detector with the desired number of features
+    orb = cv2.ORB_create(nfeatures=num_features)
+
+    # Step 2: Convert the image to grayscale if it is not already
+    if len(img.shape) == 3 and img.shape[2] == 3:
+        gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    else:
+        gray_img = img
+
+    # Step 3: Detect keypoints and compute descriptors
+    keypoints, descriptors = orb.detectAndCompute(gray_img, None)
+
+    # Step 4: Convert keypoints to numpy array of [N x 2] format
+    keypoint_array = np.array([[kp.pt[0], kp.pt[1]] for kp in keypoints], dtype=np.float32)
+
+    # Return the keypoints and descriptors
+    return keypoint_array, descriptors
 
 
 def filter_and_align_descriptors(f1: Tuple[t_points, t_descriptors], f2: Tuple[t_points, t_descriptors],
                                  similarity_threshold=.7, similarity_metric='hamming') -> Tuple[t_points, t_points]:
     """Aligns pairs of keypoints from two images.
     Aligns keypoints from two images based on descriptor similarity.
-    If K points have been detected in image1 and J points have been detected in image2, the result will be to sets of N
+    If K points have been detected in image1 and J points have been detected      in image2, the result will be to sets of N
     points representing points with similar descriptors; where N <= J and K <=points.
 
     Args:
@@ -99,130 +119,152 @@ def filter_and_align_descriptors(f1: Tuple[t_points, t_descriptors], f2: Tuple[t
     assert f1[0].shape[1] == f2[0].shape[1] == 2  # descriptor size
     assert f1[1].shape[1] == f2[1].shape[1] == 32  # points size
 
-    # step 1: compute distance matrix (1 to 8 lines)
+    # Step 1: Compute the distance matrix between descriptors in f1 and f2
+    distance_matrix = cdist(f1[1], f2[1], metric=similarity_metric)
 
+    # Step 2: Find the indices of the best and second-best matches for each descriptor in f1
+    best_match_indices = np.argmin(distance_matrix, axis=1)
+    sorted_distances = np.sort(distance_matrix, axis=1)
+    best_distances = sorted_distances[:, 0]
+    second_best_distances = sorted_distances[:, 1]
 
-    # step 2: computing the indexes of src dst so that src[src_idx,:] and dst[dst,:] refer to matching points.
+    # Step 3: Apply the ratio test to find significant matches
+    ratio_mask = (best_distances / (second_best_distances + 1e-10)) < similarity_threshold
 
+    # Step 4: Filter out the non-significant matches
+    src_points = f1[0][ratio_mask]
+    dst_points = f2[0][best_match_indices[ratio_mask]]
 
-    # step 3: find a boolean index of the matched pairs that is true only if a match was significant.
-    # A match is considered significant if the ratio of its distance to the second best is lower than a given
-    # threshold.
-    # Hint: use the previously computed distance matrix to find the second best match.
-
-
-    # step 4: removing non-significant matches and return the aligned points (their location only!)
-
-    raise NotImplementedError
+    return src_points, dst_points
 
 
 def compute_homography(f1: np.array, f2: np.array) -> np.array:
     """Computes the homography matrix given matching points.
-
-    In order to define a homography a minimum of 4 points are needed but the homography can also be overdefined with 5
-    or more points.
 
     Args:
         f1: A numpy array of size [N x 2] containing x and y coordinates of the source points.
         f2: A numpy array of size [N x 2] containing x and y coordinates of the destination points.
 
     Returns:
-        A [3 x 3] numpy array containing normalised homography matrix.
+        A [3 x 3] numpy array containing the normalized homography matrix.
     """
-    # Homogeneous coordinates
-    homography_matrix = np.zeros((3, 3))
-    assert f1.shape[0] == f1.shape[0] >= 4
+    assert f1.shape[0] == f2.shape[0] >= 4  # Ensure there are at least 4 points
 
-    # TODO 3
-    # - Construct the (>=8) x 9 matrix A.
-    # - Use the formula from the exercise sheet.
-    # - Note that every match contributes to exactly two rows of the matrix.
-    # - Extract the homogeneous solution of Ah=0 as the rightmost column vector of V.
-    # - Store the result in H.
-    # - Normalize H
-    # Hint: No loops are needed but up to to 2 nested loops might make the solution easier.
+    # Number of points
+    N = f1.shape[0]
 
-    raise NotImplementedError
-    return homography_matrix
+    # Construct the A matrix (2 rows per point pair)
+    A = np.zeros((2 * N, 9))
+    
+    for i in range(N):
+        x, y = f1[i]
+        x_prime, y_prime = f2[i]
+        
+        A[2 * i] = [-x, -y, -1, 0, 0, 0, x_prime * x, x_prime * y, x_prime]
+        A[2 * i + 1] = [0, 0, 0, -x, -y, -1, y_prime * x, y_prime * y, y_prime]
+
+    # Step 2: Compute the SVD of A
+    U, S, Vt = svd(A)
+    
+    # Step 3: The solution to Ah = 0 is the rightmost column of V (or row of Vt)
+    h = Vt[-1, :]  # This is the vector containing h0...h8
+    
+    # Step 4: Reshape h into the homography matrix H
+    H = h.reshape(3, 3)
+    
+    # Step 5: Normalize the matrix H so that h_8 = 1 (i.e., H[2, 2] = 1)
+    H = H / H[2, 2]
+    
+    return H
 
 
 def _get_inlier_count(src_points: np.array, dst_points: np.array, homography: np.array,
                       distance_threshold: float) -> int:
     """Computes the number of inliers for a homography given aligned points.
-    ## - Project the image points from image 1 to image 2
-    ## - A point is an inlier if the distance between the projected point and
-    ##      the point in image 2 is smaller than threshold.
+
     Args:
         src_points: a numpy array of [N x 2] containing source points.
-        dst_points: a numpy array of [N x 2] containing source points.
-        homography: a [3 x 3] numpy array.
-        distance_threshold: a float representing the norm of the difference between to points so that they will be
+        dst_points: a numpy array of [N x 2] containing destination points.
+        homography: a [3 x 3] numpy array representing the homography matrix.
+        distance_threshold: a float representing the norm of the difference between two points so that they are
             considered the same (near enough).
 
     Returns:
-        An integer counting how many transformed source points matched destination.
+        An integer counting how many transformed source points matched destination points.
     """
     assert src_points.shape[1] == dst_points.shape[1] == 2
     assert src_points.shape[0] == dst_points.shape[0]
 
-    # step 1: create normalized coordinates for points (maybe [x, y] --> [x, y, 1]) (4 lines)
+    # Step 1: Convert source points to homogeneous coordinates (from [x, y] to [x, y, 1])
+    src_homogeneous = np.hstack([src_points, np.ones((src_points.shape[0], 1))])
+
+    # Step 2: Project the source points to the destination space using the homography matrix
+    projected_points_homogeneous = np.dot(src_homogeneous, homography.T)
+
+    # Step 3: Re-normalize the projected points (convert [x', y', w'] to [x'/w', y'/w'])
+    projected_points = projected_points_homogeneous[:, :2] / projected_points_homogeneous[:, 2][:, np.newaxis]
+
+    # Step 4: Compute distances between the projected points and the actual destination points
+    distances = np.linalg.norm(projected_points - dst_points, axis=1)
+
+    # Count inliers where distance is less than the threshold
+    inlier_count = np.sum(distances < distance_threshold)
+
+    return inlier_count
 
 
-    # step 2: project the image points from image 1 to image 2 using the homography (1 line)
-    # Hint: You can use np.dot here
+def ransac(src_features: Tuple[t_points, t_descriptors], dst_features: Tuple[t_points, t_descriptors], steps: int,
+           distance_threshold: float, n_points=4, similarity_threshold=.7) -> np.array:
+    """Computes the best homography given noisy point descriptors using RANSAC.
 
-
-    # step 3: re-normalize the projected points ([x, y, l] --> [x/l, y/l]) (1 line)
-
-
-    # step 4: compute and return number of inliers (3 lines)
-    # Hint: You might use np.linalg.norm
-
-    raise NotImplementedError
-
-
-def ransac(src_features: Tuple[t_points, t_descriptors], dst_features: Tuple[t_points, t_descriptors], steps,
-           distance_threshold, n_points=4, similarity_threshold=.7) -> np.array:
-    """Computes the best homography given noisy point descriptors.
-
-    https://en.wikipedia.org/wiki/Random_sample_consensus
-    
     Args:
         src_features: A tuple with points and their descriptors detected in the source image.
         dst_features: A tuple with points and their descriptors detected in the destination image.
-        steps: An integer defining how many iterations to define.
-        distance_threshold: A float defining how far should to points be to be considered the same.
-        n_points: The number of point pairs used to compute the homography, it must be grater than 3.
+        steps: An integer defining how many iterations to run.
+        distance_threshold: A float defining how far two points should be to be considered the same.
+        n_points: The number of point pairs used to compute the homography, it must be greater than 3.
         similarity_threshold: The ratio of the most similar descriptor to the second most similar in order to consider
             that descriptors from the two images match.
 
     Returns:
-        A numpy array containing the homography.
+        A numpy array containing the best homography.
     """
 
-    # step 1: filter and align descriptors (1 line)
+    # Step 1: Filter and align descriptors
+    aligned_src_points, aligned_dst_points = filter_and_align_descriptors(
+        src_features, dst_features, similarity_threshold=similarity_threshold
+    )
 
-
-    # step 2: initialize the optimization loop
+    # Step 2: Initialize variables for the RANSAC loop
     best_count = 0
-    best_homography = np.eye(3)
+    best_homography = np.eye(3)  # Identity matrix as the initial homography
 
-    # step 3: optimization loop
+    # Step 3: Optimization loop
     for n in range(steps):
 
-        # step a: select random subset of points (at least 4 points) (2 lines)
-        pass
+        # Step 3a: Randomly select a subset of matching points (at least n_points)
+        idx = random.sample(range(aligned_src_points.shape[0]), n_points)
+        subset_src_points = aligned_src_points[idx]
+        subset_dst_points = aligned_dst_points[idx]
 
-        # step b: compute homography for the random points (1 line)
+        # Step 3b: Compute the homography for the random subset of points
+        try:
+            homography = compute_homography(subset_src_points, subset_dst_points)
+        except np.linalg.LinAlgError:
+            # In case the homography computation fails due to singularities, skip this iteration
+            continue
 
+        # Step 3c: Count the number of inliers using the current homography
+        inlier_count = _get_inlier_count(aligned_src_points, aligned_dst_points, homography, distance_threshold)
 
-        # step c: compare the current homography to the current best homography and update the best homography using
-        # inlier count (4 lines)
+        # Update the best homography if this one has more inliers
+        if inlier_count > best_count:
+            best_count = inlier_count
+            best_homography = homography
 
     print(f"After {steps:4} steps: {best_count} RANSAC points match!")
 
-    # step 4: return the best homography
-    raise NotImplementedError
+    # Step 4: Return the best homography found
     return best_homography
 
 
@@ -295,7 +337,8 @@ def compute_panorama_borders(images: t_images, homographies: t_homographies) -> 
     return left, top, right, bottom
 
 
-def translate_homographies(homographies: t_homographies, dx: float, dy: float):
+
+def translate_homographies(homographies: t_homographies, dx: float, dy: float) -> t_homographies:
     """Applies a uniform translation to a dictionary with homographies.
 
     Args:
@@ -305,15 +348,22 @@ def translate_homographies(homographies: t_homographies, dx: float, dy: float):
         dy: a float representing the vertical displacement of the translation.
 
     Returns:
-        a copy of the homographies dict which maps the same keys to the translated matrices.
+        A copy of the homographies dict which maps the same keys to the translated matrices.
     """
-    # step 1: create a translation matrix (3 lines)
+    # Step 1: Create the translation matrix
+    translation_matrix = np.array([
+        [1, 0, dx],
+        [0, 1, dy],
+        [0, 0, 1]
+    ])
 
+    # Step 2: Apply the translation to each homography in the dictionary
+    translated_homographies = {}
+    for key, homography in homographies.items():
+        # Apply translation by multiplying the translation matrix with the homography
+        translated_homographies[key] = np.dot(translation_matrix, homography)
 
-    # step 2: apply translation matrix on every homography matrix (2 lines)
-
-
-    raise NotImplementedError
+    return translated_homographies
 
 
 def stitch_panorama(images: t_images, homographies: t_homographies, output_size: Tuple[int, int],
